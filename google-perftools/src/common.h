@@ -104,7 +104,7 @@ static const int kMaxDynamicFreeListLength = 8192;
 
 static const Length kMaxValidPages = (~static_cast<Length>(0)) >> kPageShift;
 
-#ifdef __x86_64__
+#if defined(__x86_64__) && !defined(__native_client__)
 // All current and planned x86_64 processors only look at the lower 48 bits
 // in virtual to physical address translation.  The top 16 are thus unused.
 // TODO(rus): Under what operating systems can we increase it safely to 17?

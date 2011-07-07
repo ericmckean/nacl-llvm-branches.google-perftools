@@ -56,7 +56,7 @@
 #endif
 #include "base/sysinfo.h"
 #include "base/commandlineflags.h"
-#include "base/dynamic_annotations.h"   // for RunningOnValgrind
+#include "base/dynamic_annotations.h"   // for TCRunningOnValgrind
 #include "base/logging.h"
 #include "base/cycleclock.h"
 
@@ -220,6 +220,12 @@ static void SleepForMilliseconds(int milliseconds) {
 // Helper function estimates cycles/sec by observing cycles elapsed during
 // sleep(). Using small sleep time decreases accuracy significantly.
 static int64 EstimateCyclesPerSecond(const int estimate_time_ms) {
+#ifdef __native_client__
+  // SleepForMilliseconds (above) is broken, so this function is broken also.
+  // Also, CycleClock::Now() will have to be fixed on ARM for this to work.
+  // Just return some number on the right order of magnitude
+  return 1000000000L;
+#else
   assert(estimate_time_ms > 0);
   if (estimate_time_ms <= 0)
     return 1;
@@ -229,6 +235,7 @@ static int64 EstimateCyclesPerSecond(const int estimate_time_ms) {
   SleepForMilliseconds(estimate_time_ms);
   const int64 guess = int64(multiplier * (CycleClock::Now() - start_ticks));
   return guess;
+#endif
 }
 
 // Helper function for reading an int from a file. Returns true if successful
@@ -265,7 +272,7 @@ static void InitializeSystemInfo() {
 
   bool saw_mhz = false;
 
-  if (RunningOnValgrind()) {
+  if (TCRunningOnValgrind()) {
     // Valgrind may slow the progress of time artificially (--scale-time=N
     // option). We thus can't rely on CPU Mhz info stored in /sys or /proc
     // files. Thus, actually measure the cps.

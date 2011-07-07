@@ -40,9 +40,13 @@
 #include <inttypes.h>
 #endif
 #include <stdarg.h>
+#ifdef __native_client__
+// for size_t, off_t used by sys/mman.h
+//#include <sys/types.h>
+#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>
-#endif
+#endif // HAVE_MMAP
 #include <sys/types.h>
 #include <sys/stat.h>
 #ifdef HAVE_FCNTL_H
@@ -1383,7 +1387,7 @@ static DebugMallocImplementation debug_malloc_implementation;
 REGISTER_MODULE_INITIALIZER(debugallocation, {
   // Either we or valgrind will control memory management.  We
   // register our extension if we're the winner.
-  if (RunningOnValgrind()) {
+  if (TCRunningOnValgrind()) {
     // Let Valgrind uses its own malloc (so don't register our extension).
   } else {
     MallocExtension::Register(&debug_malloc_implementation);

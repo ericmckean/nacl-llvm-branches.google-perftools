@@ -99,6 +99,8 @@
 #include "base/atomicops-internals-x86.h"
 #elif defined(__linux__) && defined(__PPC__)
 #include "base/atomicops-internals-linuxppc.h"
+#elif defined(__pnacl__)
+#include "base/atomicops-internals-pnacl.h"
 #else
 // Assume x86 for now.  If you need to support a new architecture and
 // don't know how to implement atomic ops, you can probably get away

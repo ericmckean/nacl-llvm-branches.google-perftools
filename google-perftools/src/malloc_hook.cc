@@ -32,6 +32,10 @@
 
 #include <config.h>
 
+#if defined(__native_client__) && defined(HAVE_NEWLIB_H)
+// for size_t, off_t used by sys/mman.h
+#include <sys/types.h>
+#endif
 // Disable the glibc prototype of mremap(), as older versions of the
 // system headers define this function with only four arguments,
 // whereas newer versions allow an optional fifth argument:
@@ -39,13 +43,23 @@
 # define mremap glibc_mremap
 # include <sys/mman.h>
 # undef mremap
-#endif
+#endif // HAVE_MMAP
 
 #include <algorithm>
 #include "base/basictypes.h"
 #include "base/logging.h"
 #include "malloc_hook-inl.h"
 #include <google/malloc_hook.h>
+
+#if defined(__native_client__) && defined(HAVE_NEWLIB_H)
+/* NaCl newlib has a declaration for getpagesize() in unistd.h but no
+ * implementation. google_perftools seems to assume HAVE_MMAP implies
+ * HAVE_GETPAGESIZE.
+ * We just guess 4k pages. TODO(dschuff) is this always right? */
+size_t getpagesize() {
+  return 1 << 12;
+}
+#endif
 
 // This #ifdef should almost never be set.  Set NO_TCMALLOC_SAMPLES if
 // you're porting to a system where you really can't get a stacktrace.

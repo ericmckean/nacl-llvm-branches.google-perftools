@@ -75,9 +75,13 @@
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>         // for open; used with mmap-hook test
 #endif
+#ifdef __native_client__
+// for size_t, off_t used by sys/mman.h
+#include <sys/types.h>
+#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>      // for testing mmap hooks
-#endif
+#endif // HAVE_MMAP
 #ifdef HAVE_MALLOC_H
 #include <malloc.h>        // defines pvalloc/etc on cygwin
 #endif
@@ -157,6 +161,19 @@ static int news_handled = 0;
 class TesterThread;
 static TesterThread** threads;
 
+// nacl currently does not have random()... using xrand48 instead...
+#if defined(__native_client__)
+#define seed_random(seed)                       \
+  srand48(seed)
+#define get_random()                            \
+  lrand48()
+#else
+#define seed_random(seed)                       \
+  srandom(seed)
+#define get_random()                            \
+  random()
+#endif
+
 // To help with generating random numbers
 class TestHarness {
  private:
@@ -170,7 +187,7 @@ class TestHarness {
  public:
   TestHarness(int seed)
       : types_(new vector<Type>), total_weight_(0), num_tests_(0) {
-    srandom(seed);
+    seed_random(seed);
   }
   ~TestHarness() {
     delete types_;
@@ -193,17 +210,17 @@ class TestHarness {
   // If n != 0, returns the next pseudo-random number in the range [0 .. n)
   int Uniform(int n) {
     if (n == 0) {
-      return random() * 0;
+      return get_random() * 0;
     } else {
-      return random() % n;
+      return get_random() % n;
     }
   }
   // Pick "base" uniformly from range [0,max_log] and then return
   // "base" random bits.  The effect is to pick a number in the range
   // [0,2^max_log-1] with bias towards smaller numbers.
   int Skewed(int max_log) {
-    const int base = random() % (max_log+1);
-    return random() % (1 << base);
+    const int base = get_random() % (max_log+1);
+    return get_random() % (1 << base);
   }
 
  private:

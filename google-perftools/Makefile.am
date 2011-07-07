@@ -1266,6 +1266,10 @@ libprofiler.pc: libtcmalloc.pc
 libtool: $(LIBTOOL_DEPS)
 	$(SHELL) ./config.status --recheck
 
+nacl-test: $(TESTS)
+	TCMALLOC_CC=$(NACL_CC) TCMALLOC_ARCH=$(NACL_ARCH)\
+	  ../tcmalloc_nacl.sh make-nacl-test $(TESTS)
+
 # Windows wants write permission to .vcproj files and maybe even sln files.
 dist-hook:
 	test -e "$(distdir)/vsprojects" \

@@ -43,9 +43,13 @@
 #include <unistd.h>
 #endif
 #include <fcntl.h>    // for open()
+#ifdef __native_client__
+// for size_t, off_t used by sys/mman.h
+#include <sys/types.h>
+#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>
-#endif
+#endif // HAVE_MMAP
 #include <errno.h>
 #include "common.h"
 #include "system-alloc.h"
@@ -249,7 +253,8 @@ void SbrkSysAllocator::DumpStats(TCMalloc_Printer* printer) {
 
 void* MmapSysAllocator::Alloc(size_t size, size_t *actual_size,
                               size_t alignment) {
-#ifndef HAVE_MMAP
+#if !defined(HAVE_MMAP) && !defined(__native_client__)
+  // native client should HAVE_MMAP but doesn't define that...
   failed_ = true;
   return NULL;
 #else
@@ -323,7 +328,8 @@ void MmapSysAllocator::DumpStats(TCMalloc_Printer* printer) {
 
 void* DevMemSysAllocator::Alloc(size_t size, size_t *actual_size,
                                 size_t alignment) {
-#ifndef HAVE_MMAP
+#if !defined(HAVE_MMAP) && !defined(__native_client__)
+  // native client should HAVE_MMAP but doesn't define that...
   failed_ = true;
   return NULL;
 #else

@@ -36,6 +36,12 @@
 #include <config.h>
 
 #include <time.h>
+#ifdef __native_client__
+#include <sys/time.h> /* Fix for struct timespec definition */
+#include <sys/nacl_syscalls.h> /* For nanosleep() */
+// TODO(dschuff) Why do we require nacl_syscalls.h for nanosleep here
+// but not in a bare test program?
+#endif
 #if (defined(_WIN32) || defined(__MINGW32__)) && (!defined(__CYGWIN__) && !defined(__CYGWIN32__))
 #include <windows.h>   // for DWORD
 #include <TlHelp32.h>  // for CreateToolhelp32Snapshot
@@ -44,7 +50,11 @@
 #include <unistd.h>    // for pid_t
 #endif
 #include <stddef.h>    // for size_t
+#if defined(__native_client__) && defined(HAVE_NEWLIB_H)
+#include <sys/syslimits.h> // for PATH_MAX
+#else
 #include <limits.h>    // for PATH_MAX
+#endif
 #include "base/basictypes.h"
 #include "base/logging.h"   // for RawFD
 

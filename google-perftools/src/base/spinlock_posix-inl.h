@@ -37,6 +37,10 @@
 #include <sched.h>      /* For sched_yield() */
 #endif
 #include <time.h>       /* For nanosleep() */
+#ifdef __native_client__
+#include <sys/time.h> /* For struct timespec and nanosleep() */
+#include <sys/nacl_syscalls.h>
+#endif
 
 namespace base {
 namespace internal {

@@ -297,6 +297,31 @@ extern "C" {
 #endif
   size_t malloc_size(void* p) __THROW            ALIAS("tc_malloc_size");
   size_t malloc_usable_size(void* p) __THROW     ALIAS("tc_malloc_size");
+
+#ifdef HAVE_NEWLIB_H
+ /*
+ * Newlib internals use these entry points rather than the standard ones.
+ * We define them here so newlib's allocations also go through tcmalloc, and
+ * avoid problems with e.g. strdup()
+ */
+
+void *_malloc_r(struct _reent *ignored, size_t size) {
+  return tc_malloc(size);
+}
+
+void *_calloc_r(struct _reent *ignored, size_t n, size_t size) {
+  return tc_calloc(n, size);
+}
+
+void *_realloc_r(struct _reent *ignored, void *ptr, size_t size) {
+  return tc_realloc(ptr, size);
+}
+
+void _free_r(struct _reent *ignored, void *ptr) {
+  tc_free(ptr);
+}
+#endif
+
 }   // extern "C"
 #else  // #if defined(__GNUC__) && !defined(__MACH__)
 // Portable wrappers
@@ -335,6 +360,7 @@ extern "C" {
 #endif
   size_t malloc_size(void* p) __THROW            { return tc_malloc_size(p); }
   size_t malloc_usable_size(void* p) __THROW     { return tc_malloc_size(p); }
+
 }  // extern "C"
 #endif  // #if defined(__GNUC__)
 
@@ -912,7 +938,7 @@ TCMallocGuard::TCMallocGuard() {
 #ifdef TCMALLOC_FOR_DEBUGALLOCATION
     // Let debugallocation register its extension.
 #else
-    if (RunningOnValgrind()) {
+    if (TCRunningOnValgrind()) {
       // Let Valgrind uses its own malloc (so don't register our extension).
     } else {
       MallocExtension::Register(new TCMallocImplementation);
@@ -1126,6 +1152,7 @@ inline void do_free_with_callback(void* ptr, void (*invalid_free_fn)(void*)) {
       // a dynamic library, but is not listed last on the link line.
       // In that case, libraries after it on the link line will
       // allocate with libc malloc, but free with tcmalloc's free.
+      printf("Invoking InvalidFree from do_free_with_callback: %p\n", ptr);
       (*invalid_free_fn)(ptr);  // Decide how to handle the bad free request
       return;
     }

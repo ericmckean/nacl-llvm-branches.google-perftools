@@ -96,7 +96,12 @@ void SpinLock::SlowLock() {
   // it.  Record the current timestamp in the local variable wait_start_time
   // so the total wait time can be stored in the lockword once this thread
   // obtains the lock.
+#ifndef __native_client__
   int64 wait_start_time = CycleClock::Now();
+#else
+  // Since Now() is broken and we aren't profiling, just use any valid value
+  int64 wait_start_time = kSpinLockSleeper + 1;
+#endif
   Atomic32 wait_cycles;
   Atomic32 lock_value = SpinLoop(wait_start_time, &wait_cycles);
 
@@ -171,6 +176,7 @@ void SpinLock::SlowUnlock(uint64 wait_cycles) {
 }
 
 inline int32 SpinLock::CalculateWaitCycles(int64 wait_start_time) {
+#ifndef __native_client__
   int32 wait_cycles = ((CycleClock::Now() - wait_start_time) >>
                        PROFILE_TIMESTAMP_SHIFT);
   // The number of cycles waiting for the lock is used as both the
@@ -178,5 +184,10 @@ inline int32 SpinLock::CalculateWaitCycles(int64 wait_start_time) {
   // kSpinLockHeld.  Make sure the value returned is at least
   // kSpinLockSleeper.
   wait_cycles |= kSpinLockSleeper;
+#else
+  // CycleClock::Now() is broken, and we aren't using lock profiling, so
+  // any valid number (see above comment) will do
+  int32 wait_cycles = kSpinLockSleeper + 1;
+#endif
   return wait_cycles;
 }

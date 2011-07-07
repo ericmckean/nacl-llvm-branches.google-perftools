@@ -44,7 +44,10 @@ typedef int32_t Atomic32;
 
 // NOTE(vchen): x86 does not need to define AtomicWordCastType, because it
 // already matches Atomic32 or Atomic64, depending on the platform.
-
+#if defined(__native_client__) && defined(HAVE_NEWLIB_H)
+// NaCl glibc has a compatible int32_t definition but newlib does not.
+#define AtomicWordCastType Atomic32
+#endif
 
 // This struct is not part of the public API of this module; clients may not
 // use it.

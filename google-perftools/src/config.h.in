@@ -86,6 +86,9 @@
 /* define if the compiler implements namespaces */
 #undef HAVE_NAMESPACES
 
+/* Define to 1 if you have the <newlib.h> header file. */
+#undef HAVE_NEWLIB_H
+
 /* Define to 1 if you have the <poll.h> header file. */
 #undef HAVE_POLL_H
 

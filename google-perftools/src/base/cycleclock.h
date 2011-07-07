@@ -46,6 +46,11 @@
 #define GOOGLE_BASE_CYCLECLOCK_H_
 
 #include "base/basictypes.h"   // make sure we get the def for int64
+
+#if defined(__pnacl__)
+extern "C" int64_t llvm_readcyclecounter() asm("llvm.readcyclecounter");
+#endif
+
 #if defined(__MACH__) && defined(__APPLE__)
 # include <mach/mach_time.h>
 #elif defined(__ARM_ARCH_5T__) || defined(__ARM_ARCH_3__)
@@ -110,6 +115,12 @@ struct CycleClock {
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return static_cast<uint64>(tv.tv_sec) * 1000000 + tv.tv_usec;
+#elif defined(__pnacl__)
+    //return llvm_readcyclecounter();
+    // TODO: for this to work, llvm.readcyclecounter intrinsic needs to be
+    // implemented on ARM. We could use a system call like the ARM defines
+    // above, but want to avoid that in our locks if possible.
+    return 0;
 #else
     // We could define __alpha here as well, but it only has a 32-bit
     // timer (good for like 4 seconds), which isn't very useful.

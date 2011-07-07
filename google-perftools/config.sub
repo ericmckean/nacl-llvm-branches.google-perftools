@@ -4,7 +4,7 @@
 #   2000, 2001, 2002, 2003, 2004, 2005, 2006 Free Software Foundation,
 #   Inc.
 
-timestamp='2007-06-28'
+timestamp='2011-02-25'
 
 # This file is (in principle) common to ALL GNU software.
 # The presence of a machine in this file suggests that SOME GNU software
@@ -306,6 +306,14 @@ case $basic_machine in
 	i*86 | x86_64)
 	  basic_machine=$basic_machine-pc
 	  ;;
+    nacl64*)
+      basic_machine=x86_64-pc
+      os=-nacl
+      ;;
+    nacl*)
+      basic_machine=i686-pc
+      os=-nacl
+      ;;
 	# Object if more than one company name word.
 	*-*-*)
 		echo Invalid configuration \`$1\': machine \`$basic_machine\' not recognized 1>&2
@@ -1238,6 +1246,10 @@ case $os in
 			;;
 		esac
 		;;
+
+    -nacl*)
+        os=-nacl
+        ;;
 	-nto-qnx*)
 		;;
 	-nto*)

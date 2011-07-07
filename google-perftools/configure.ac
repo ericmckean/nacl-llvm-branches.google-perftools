@@ -44,6 +44,8 @@ need_nanosleep=yes   # Used later, to decide if to run ACX_NANOSLEEP
 case "$host" in
    *-mingw*) default_enable_minimal=yes; default_enable_debugalloc=no;
              need_nanosleep=no;;
+   *-nacl*) default_enable_minimal=yes; default_enable_debugalloc=no;
+             need_nanosleep=no;;
    *-cygwin*) default_enable_heap_checker=no; default_enable_cpu_profiler=no;;
    *-freebsd*) default_enable_heap_checker=no;;
    *-darwin*) default_enable_heap_checker=no;;
@@ -88,9 +90,17 @@ AC_PROG_CXX
 AM_CONDITIONAL(GCC, test "$GCC" = yes)   # let the Makefile know if we're gcc
 AM_PROG_CC_C_O      # shrug: autogen.sh suddenly needs this for some reason
 
-# Check if we have an objcopy installed that supports -W
-AC_CHECK_TOOL([OBJCOPY], [objcopy], [])
-AM_CONDITIONAL(HAVE_OBJCOPY_WEAKEN, ["$OBJCOPY" -W malloc /bin/ls /dev/null])
+case $host in
+  *nacl*)
+    ;; # nacl-gcc has objcopy, but it's not detected right by configure, so it
+       # falls back to native objcopy, which doesn't understand nexes.
+       # pnacl has no objcopy, so the result is the same.
+  *)
+    # Check if we have an objcopy installed that supports -W
+    AC_CHECK_TOOL([OBJCOPY], [objcopy], [])
+    ;;
+esac
+    AM_CONDITIONAL(HAVE_OBJCOPY_WEAKEN, ["$OBJCOPY" -W malloc /bin/ls /dev/null])
 
 case $host_os in
   *mingw*)
@@ -138,7 +148,21 @@ AC_CHECK_HEADERS(poll.h)        # optional; for forking out to symbolizer
 AC_CHECK_HEADERS(fcntl.h)       # for tcmalloc_unittest
 AC_CHECK_HEADERS(grp.h)         # for heapchecker_unittest
 AC_CHECK_HEADERS(pwd.h)         # for heapchecker_unittest
-AC_CHECK_HEADERS(sys/resource.h)         # for memalign_unittest.cc
+# detect nacl newlib/glibc
+AC_CHECK_HEADERS(newlib.h, [LIBS=${LIBS}"-lnosys -lm"])
+echo $LIBS
+case "$host" in
+   *nacl*) 
+     ;; # pnacl has a stub sys/resource.h which is detected by configure, but
+        # it doesn't declare getrlimit so the build fails
+        # nacl-gcc has a declaration so the build works, but nacl doesn't
+        # support getrlimit anyway
+   *)
+      AC_CHECK_HEADERS(sys/resource.h)         # for memalign_unittest.cc
+     ;;
+esac
+
+
 AC_CHECK_HEADERS(valgrind.h)    # we have a local copy if this isn't found
 # We also need <ucontext.h>/<sys/ucontext.h>, but we get those from
 # AC_PC_FROM_UCONTEXT, below.
@@ -170,6 +194,10 @@ case "$host" in
                AC_DEFINE(HAVE_MMAP, 1,
                          [Define to 1 if you have a working `mmap' system call.])
                ;;
+  # nacl has mmap, but the autoconf test doesn't detect it.
+  *nacl*) AC_DEFINE(HAVE_MMAP, 1,
+                    [Define to 1 if you have a working `mmap' system call.])
+           ;;
             *) AC_FUNC_MMAP
                ;;
 esac

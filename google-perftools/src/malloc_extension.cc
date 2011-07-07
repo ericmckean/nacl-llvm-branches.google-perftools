@@ -199,7 +199,7 @@ void MallocExtension::Register(MallocExtension* implementation) {
   // callers should be responsible for checking that they are the
   // malloc that is really being run, before calling Register.  This
   // is just here as an extra sanity check.)
-  if (!RunningOnValgrind()) {
+  if (!TCRunningOnValgrind()) {
     current_instance = implementation;
   }
 }

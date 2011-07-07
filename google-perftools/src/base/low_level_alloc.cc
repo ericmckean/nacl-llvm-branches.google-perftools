@@ -43,9 +43,13 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
+#ifdef __native_client__
+// for size_t, off_t used by sys/mman.h
+#include <sys/types.h>
+#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>
-#endif
+#endif // HAVE_MMAP
 #include <new>                   // for placement-new
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old

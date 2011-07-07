@@ -92,6 +92,8 @@ int main(int argc, char** argv) {
     struct timeval tv_start = r.ru_utime;
 #elif defined(_WIN32)
     long long int tv_start = GetTickCount();
+#elif defined (__native_client__)
+    // We don't have getrusage, just make it 0 time, see below
 #else
 # error No way to calculate time on your system
 #endif
@@ -112,6 +114,10 @@ int main(int argc, char** argv) {
     int64 sumsec = (tv_end - tv_start) / 1000;
     // Resolution in windows is only to the millisecond, alas
     int64 sumusec = ((tv_end - tv_start) % 1000) * 1000;
+#elif defined (__native_client__)
+    // We don't have getrusage, just make it 0 time
+    int64 sumsec = 0;
+    int64 sumusec = 0;
 #else
 # error No way to calculate time on your system
 #endif
