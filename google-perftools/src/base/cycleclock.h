@@ -46,15 +46,27 @@
 #define GOOGLE_BASE_CYCLECLOCK_H_
 
 #include "base/basictypes.h"   // make sure we get the def for int64
-
+#include "base/arm_instruction_set_select.h"
 #if defined(__pnacl__)
 extern "C" int64_t llvm_readcyclecounter() asm("llvm.readcyclecounter");
 #endif
 
 #if defined(__MACH__) && defined(__APPLE__)
 # include <mach/mach_time.h>
-#elif defined(__ARM_ARCH_5T__) || defined(__ARM_ARCH_3__)
-# include <sys/time.h>
+#endif
+// For MSVC, we want to use '_asm rdtsc' when possible (since it works
+// with even ancient MSVC compilers), and when not possible the
+// __rdtsc intrinsic, declared in <intrin.h>.  Unfortunately, in some
+// environments, <windows.h> and <intrin.h> have conflicting
+// declarations of some other intrinsics, breaking compilation.
+// Therefore, we simply declare __rdtsc ourselves. See also
+// http://connect.microsoft.com/VisualStudio/feedback/details/262047
+#if defined(_MSC_VER) && !defined(_M_IX86)
+extern "C" uint64 __rdtsc();
+#pragma intrinsic(__rdtsc)
+#endif
+#ifdef ARMV3
+#include <sys/time.h>
 #endif
 
 // NOTE: only i386 and x86_64 have been well tested.
@@ -103,18 +115,32 @@ struct CycleClock {
     asm("mov %0 = ar.itc" : "=r" (itc));
     return itc;
 #elif defined(_MSC_VER) && defined(_M_IX86)
+    // Older MSVC compilers (like 7.x) don't seem to support the
+    // __rdtsc intrinsic properly, so I prefer to use _asm instead
+    // when I know it will work.  Otherwise, I'll use __rdtsc and hope
+    // the code is being compiled with a non-ancient compiler.
     _asm rdtsc
-
-// If none of the above cases trigger, we use a solution based on
-// a system call (gettimeofday or similar).  We do these in order
-// from fastest to slowest.  We do not have an '#else' catch-all
-// case here that just calls gettimeofday(); that system call is
-// slow, and this function is expected to be fast, so we don't want
-// to use it without an explicit decision that it's the only way.
-#elif defined(__ARM_ARCH_5T__) || defined(__ARM_ARCH_3__)
+#elif defined(_MSC_VER)
+    return __rdtsc();
+#elif defined(ARMV3)
+#if defined(ARMV6)  // V6 is the earliest arch that has a standard cyclecount
+    uint32 pmccntr;
+    uint32 pmuseren;
+    uint32 pmcntenset;
+    // Read the user mode perf monitor counter access permissions.
+    asm("mrc p15, 0, %0, c9, c14, 0" : "=r" (pmuseren));
+    if (pmuseren & 1) {  // Allows reading perfmon counters for user mode code.
+      asm("mrc p15, 0, %0, c9, c12, 1" : "=r" (pmcntenset));
+      if (pmcntenset & 0x80000000ul) {  // Is it counting?
+        asm("mrc p15, 0, %0, c9, c13, 0" : "=r" (pmccntr));
+        // The counter is set up to count every 64th cycle
+        return static_cast<int64>(pmccntr) * 64;  // Should optimize to << 6
+      }
+    }
+#endif
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return static_cast<uint64>(tv.tv_sec) * 1000000 + tv.tv_usec;
+    return static_cast<int64>(tv.tv_sec) * 1000000 + tv.tv_usec;
 #elif defined(__pnacl__)
     //return llvm_readcyclecounter();
     // TODO: for this to work, llvm.readcyclecounter intrinsic needs to be
@@ -122,8 +148,9 @@ struct CycleClock {
     // above, but want to avoid that in our locks if possible.
     return 0;
 #else
-    // We could define __alpha here as well, but it only has a 32-bit
-    // timer (good for like 4 seconds), which isn't very useful.
+// The soft failover to a generic implementation is automatic only for ARM.
+// For other platforms the developer is expected to make an attempt to create
+// a fast implementation and use generic version if nothing better is available.
 #error You need to define CycleTimer for your O/S and CPU
 #endif
   }

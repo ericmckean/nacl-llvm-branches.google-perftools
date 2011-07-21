@@ -70,6 +70,19 @@ namespace base {
 struct MallocRange;
 }
 
+// Interface to a pluggable system allocator.
+class SysAllocator {
+ public:
+  SysAllocator() {
+  }
+  virtual ~SysAllocator();
+
+  // Allocates "size"-byte of memory from system aligned with "alignment".
+  // Returns NULL if failed. Otherwise, the returned pointer p up to and
+  // including (p + actual_size -1) have been allocated.
+  virtual void* Alloc(size_t size, size_t *actual_size, size_t alignment) = 0;
+};
+
 // The default implementations of the following routines do nothing.
 // All implementations should be thread-safe; the current one
 // (TCMallocImplementation) is.
@@ -87,6 +100,7 @@ class PERFTOOLS_DLL_DECL MallocExtension {
 
   // See "verify_memory.h" to see what these routines do
   virtual bool VerifyAllMemory();
+  // TODO(csilvers): change these to const void*.
   virtual bool VerifyNewMemory(void* p);
   virtual bool VerifyArrayNewMemory(void* p);
   virtual bool VerifyMallocMemory(void* p);
@@ -102,7 +116,9 @@ class PERFTOOLS_DLL_DECL MallocExtension {
   // Outputs to "writer" a sample of live objects and the stack traces
   // that allocated these objects.  The format of the returned output
   // is equivalent to the output of the heap profiler and can
-  // therefore be passed to "pprof".
+  // therefore be passed to "pprof". This function is equivalent to
+  // ReadStackTraces. The main difference is that this function returns
+  // serialized data appropriately formatted for use by the pprof tool.
   // NOTE: by default, tcmalloc does not do any heap sampling, and this
   //       function will always return an empty sample.  To get useful
   //       data from GetHeapSample, you must also set the environment
@@ -112,7 +128,10 @@ class PERFTOOLS_DLL_DECL MallocExtension {
   // Outputs to "writer" the stack traces that caused growth in the
   // address space size.  The format of the returned output is
   // equivalent to the output of the heap profiler and can therefore
-  // be passed to "pprof".  (This does not depend on, or require,
+  // be passed to "pprof". This function is equivalent to
+  // ReadHeapGrowthStackTraces. The main difference is that this function
+  // returns serialized data appropriately formatted for use by the
+  // pprof tool.  (This does not depend on, or require,
   // TCMALLOC_SAMPLE_PARAMETER.)
   virtual void GetHeapGrowthStacks(MallocExtensionWriter* writer);
 
@@ -201,6 +220,27 @@ class PERFTOOLS_DLL_DECL MallocExtension {
   // Most malloc implementations ignore this routine.
   virtual void MarkThreadBusy();
 
+  // Gets the system allocator used by the malloc extension instance. Returns
+  // NULL for malloc implementations that do not support pluggable system
+  // allocators.
+  virtual SysAllocator* GetSystemAllocator();
+
+  // Sets the system allocator to the specified.
+  //
+  // Users could register their own system allocators for malloc implementation
+  // that supports pluggable system allocators, such as TCMalloc, by doing:
+  //   alloc = new MyOwnSysAllocator();
+  //   MallocExtension::instance()->SetSystemAllocator(alloc);
+  // It's up to users whether to fall back (recommended) to the default
+  // system allocator (use GetSystemAllocator() above) or not. The caller is
+  // responsible to any necessary locking.
+  // See tcmalloc/system-alloc.h for the interface and
+  //     tcmalloc/memfs_malloc.cc for the examples.
+  //
+  // It's a no-op for malloc implementations that do not support pluggable
+  // system allocators.
+  virtual void SetSystemAllocator(SysAllocator *a);
+
   // Try to release num_bytes of free memory back to the operating
   // system for reuse.  Use this extension with caution -- to get this
   // memory back may require faulting pages back in by the OS, and
@@ -241,7 +281,26 @@ class PERFTOOLS_DLL_DECL MallocExtension {
   // will return 0.)
   // This is equivalent to malloc_size() in OS X, malloc_usable_size()
   // in glibc, and _msize() for windows.
+  // TODO(csilvers): change to const void*.
   virtual size_t GetAllocatedSize(void* p);
+
+  // Returns kOwned if this malloc implementation allocated the memory
+  // pointed to by p, or kNotOwned if some other malloc implementation
+  // allocated it or p is NULL.  May also return kUnknownOwnership if
+  // the malloc implementation does not keep track of ownership.
+  // REQUIRES: p must be a value returned from a previous call to
+  // malloc(), calloc(), realloc(), memalign(), posix_memalign(),
+  // valloc(), pvalloc(), new, or new[], and must refer to memory that
+  // is currently allocated (so, for instance, you should not pass in
+  // a pointer after having called free() on it).
+  enum Ownership {
+    // NOTE: Enum values MUST be kept in sync with the version in
+    // malloc_extension_c.h
+    kUnknownOwnership = 0,
+    kOwned,
+    kNotOwned
+  };
+  virtual Ownership GetOwnership(const void* p);
 
   // The current malloc implementation.  Always non-NULL.
   static MallocExtension* instance();
@@ -289,7 +348,6 @@ class PERFTOOLS_DLL_DECL MallocExtension {
   // "tcmalloc.thread" - tcmalloc's per-thread caches. Never unmapped.
   virtual void GetFreeListSizes(std::vector<FreeListInfo>* v);
 
- protected:
   // Get a list of stack traces of sampled allocation points.  Returns
   // a pointer to a "new[]-ed" result array, and stores the sample
   // period in "sample_period".

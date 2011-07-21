@@ -56,7 +56,7 @@
 #endif
 #include "base/sysinfo.h"
 #include "base/commandlineflags.h"
-#include "base/dynamic_annotations.h"   // for TCRunningOnValgrind
+#include "base/dynamic_annotations.h"   // for RunningOnValgrind
 #include "base/logging.h"
 #include "base/cycleclock.h"
 
@@ -204,7 +204,7 @@ bool GetUniquePathFromEnv(const char* env_name, char* path) {
 static double cpuinfo_cycles_per_second = 1.0;  // 0.0 might be dangerous
 static int cpuinfo_num_cpus = 1;  // Conservative guess
 
-static void SleepForMilliseconds(int milliseconds) {
+void SleepForMilliseconds(int milliseconds) {
 #ifdef PLATFORM_WINDOWS
   _sleep(milliseconds);   // Windows's _sleep takes milliseconds argument
 #else
@@ -221,8 +221,9 @@ static void SleepForMilliseconds(int milliseconds) {
 // sleep(). Using small sleep time decreases accuracy significantly.
 static int64 EstimateCyclesPerSecond(const int estimate_time_ms) {
 #ifdef __native_client__
-  // SleepForMilliseconds (above) is broken, so this function is broken also.
-  // Also, CycleClock::Now() will have to be fixed on ARM for this to work.
+  // TODO(dschuff): enable this for non-pnacl, no reason it can't work
+  // but it's not getting build/tested/used anywhere
+  // CycleClock::Now() is broken on ARM, so this function is broken also.
   // Just return some number on the right order of magnitude
   return 1000000000L;
 #else
@@ -238,6 +239,8 @@ static int64 EstimateCyclesPerSecond(const int estimate_time_ms) {
 #endif
 }
 
+// ReadIntFromFile is only called on linux and cygwin platforms.
+#if defined(__linux__) || defined(__CYGWIN__) || defined(__CYGWIN32__)
 // Helper function for reading an int from a file. Returns true if successful
 // and the memory location pointed to by value is set to the value read.
 static bool ReadIntFromFile(const char *file, int *value) {
@@ -257,6 +260,7 @@ static bool ReadIntFromFile(const char *file, int *value) {
   }
   return ret;
 }
+#endif
 
 // WARNING: logging calls back to InitializeSystemInfo() so it must
 // not invoke any logging code.  Also, InitializeSystemInfo() can be
@@ -272,7 +276,7 @@ static void InitializeSystemInfo() {
 
   bool saw_mhz = false;
 
-  if (TCRunningOnValgrind()) {
+  if (RunningOnValgrind()) {
     // Valgrind may slow the progress of time artificially (--scale-time=N
     // option). We thus can't rely on CPU Mhz info stored in /sys or /proc
     // files. Thus, actually measure the cps.
@@ -322,6 +326,7 @@ static void InitializeSystemInfo() {
   }
 
   double bogo_clock = 1.0;
+  bool saw_bogo = false;
   int num_cpus = 0;
   line[0] = line[1] = '\0';
   int chars_read = 0;
@@ -345,19 +350,23 @@ static void InitializeSystemInfo() {
     if (newline != NULL)
       *newline = '\0';
 
+    // When parsing the "cpu MHz" and "bogomips" (fallback) entries, we only
+    // accept postive values. Some environments (virtual machines) report zero,
+    // which would cause infinite looping in WallTime_Init.
     if (!saw_mhz && strncasecmp(line, "cpu MHz", sizeof("cpu MHz")-1) == 0) {
       const char* freqstr = strchr(line, ':');
       if (freqstr) {
         cpuinfo_cycles_per_second = strtod(freqstr+1, &err) * 1000000.0;
-        if (freqstr[1] != '\0' && *err == '\0')
+        if (freqstr[1] != '\0' && *err == '\0' && cpuinfo_cycles_per_second > 0)
           saw_mhz = true;
       }
     } else if (strncasecmp(line, "bogomips", sizeof("bogomips")-1) == 0) {
       const char* freqstr = strchr(line, ':');
-      if (freqstr)
+      if (freqstr) {
         bogo_clock = strtod(freqstr+1, &err) * 1000000.0;
-      if (freqstr == NULL || freqstr[1] == '\0' || *err != '\0')
-        bogo_clock = 1.0;
+        if (freqstr[1] != '\0' && *err == '\0' && bogo_clock > 0)
+          saw_bogo = true;
+      }
     } else if (strncasecmp(line, "processor", sizeof("processor")-1) == 0) {
       num_cpus++;  // count up every time we see an "processor :" entry
     }
@@ -365,9 +374,14 @@ static void InitializeSystemInfo() {
   close(fd);
 
   if (!saw_mhz) {
-    // If we didn't find anything better, we'll use bogomips, but
-    // we're not happy about it.
-    cpuinfo_cycles_per_second = bogo_clock;
+    if (saw_bogo) {
+      // If we didn't find anything better, we'll use bogomips, but
+      // we're not happy about it.
+      cpuinfo_cycles_per_second = bogo_clock;
+    } else {
+      // If we don't even have bogomips, we'll use the slow estimation.
+      cpuinfo_cycles_per_second = EstimateCyclesPerSecond(1000);
+    }
   }
   if (cpuinfo_cycles_per_second == 0.0) {
     cpuinfo_cycles_per_second = 1.0;   // maybe unnecessary, but safe
@@ -498,7 +512,7 @@ static void ConstructFilename(const char* spec, pid_t pid,
                               char* buf, int buf_size) {
   CHECK_LT(snprintf(buf, buf_size,
                     spec,
-                    pid ? pid : getpid()), buf_size);
+                    static_cast<int>(pid ? pid : getpid())), buf_size);
 }
 #endif
 
@@ -811,7 +825,8 @@ bool ProcMapsIterator::NextExt(uint64 *start, uint64 *end, char **flags,
                Buffer::kBufSize);
     } else {
       CHECK_LT(snprintf(object_path.buf_, Buffer::kBufSize,
-                        "/proc/%d/path/%s", pid_, mapinfo->pr_mapname),
+                        "/proc/%d/path/%s",
+                        static_cast<int>(pid_), mapinfo->pr_mapname),
                Buffer::kBufSize);
     }
     ssize_t len = readlink(object_path.buf_, current_filename_, PATH_MAX);

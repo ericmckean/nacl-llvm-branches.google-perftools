@@ -72,8 +72,12 @@ void TestMallocHook(void) {
   }
 #endif
 
-  MallocHook_SetNewHook(&TestNewHook);
-  MallocHook_SetDeleteHook(&TestDeleteHook);
+  if (!MallocHook_AddNewHook(&TestNewHook)) {
+    FAIL("Failed to add new hook");
+  }
+  if (!MallocHook_AddDeleteHook(&TestDeleteHook)) {
+    FAIL("Failed to add delete hook");
+  }
   free(malloc(10));
   free(malloc(20));
   if (g_new_hook_calls != 2) {
@@ -81,6 +85,12 @@ void TestMallocHook(void) {
   }
   if (g_delete_hook_calls != 2) {
     FAIL("Wrong number of calls to the delete hook");
+  }
+  if (!MallocHook_RemoveNewHook(&TestNewHook)) {
+    FAIL("Failed to remove new hook");
+  }
+  if (!MallocHook_RemoveDeleteHook(&TestDeleteHook)) {
+    FAIL("Failed to remove delete hook");
   }
 }
 
@@ -115,6 +125,14 @@ void TestMallocExtension(void) {
   }
   if (MallocExtension_GetAllocatedSize(x) < 10) {
     FAIL("GetEstimatedAllocatedSize returned a bad value (too small)");
+  }
+  if (MallocExtension_GetOwnership(x) != MallocExtension_kOwned) {
+    FAIL("DidAllocatePtr returned a bad value (kNotOwned)");
+  }
+  /* TODO(csilvers): this relies on undocumented behavior that
+     GetOwnership works on stack-allocated variables.  Use a better test. */
+  if (MallocExtension_GetOwnership(hist) != MallocExtension_kNotOwned) {
+    FAIL("DidAllocatePtr returned a bad value (kOwned)");
   }
 
   free(x);

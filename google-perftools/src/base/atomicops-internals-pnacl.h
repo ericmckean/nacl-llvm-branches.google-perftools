@@ -6,7 +6,6 @@
 #define BASE_ATOMICOPS_INTERNALS_PNACL_H_
 
 typedef int32_t Atomic32;
-#define AtomicWordCastType Atomic32
 
 namespace base {
 namespace subtle {
@@ -82,7 +81,6 @@ inline Atomic32 NoBarrier_AtomicIncrement(volatile Atomic32* ptr,
 inline Atomic32 Barrier_AtomicIncrement(volatile Atomic32* ptr,
                                         Atomic32 increment) {
   Atomic32 temp = __sync_add_and_fetch(ptr, increment);
-  // temp now holds the old value of ptr
   MemoryBarrier();
   return temp;
 }

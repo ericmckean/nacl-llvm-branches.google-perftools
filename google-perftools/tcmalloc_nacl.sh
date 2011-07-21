@@ -44,34 +44,35 @@ tc-setup-naclgcc() {
   local mode=$2
   local flags
   local tc_base
-  local gcc_suffix=64
+  local gcc_arch=x86_64
 
   NEXE_SUFFIX=nexe
   case $arch in
     x86-32) 
-      gcc_suffix=""
+      gcc_arch=i686
       ;;
     x86-64)
-      gcc_suffix=64
-    ;;
-    *)
+      gcc_arch=x86_64
+      ;;
+         *)
     echo "Bad naclgcc arch" $arch
     exit -1
   esac
 
   flags="-static"
 
-  if [ $NACL_CC == "nacl-gcc" ]; then
+  if [ ${NACL_CC} == "nacl-gcc" ]; then
     tc_base=${NACL_TC_BASE}
   elif [ $NACL_CC == "nacl-gcc-newlib" ]; then
     tc_base=${NACL_TC_BASE_NEWLIB}
   fi
 
   CONFIGURE_ENV=(
-    CC="${tc_base}/nacl${gcc_suffix}-gcc ${flags}" \
-    CXX="${tc_base}/nacl${gcc_suffix}-g++ ${flags}" \
-    LD="${tc_base}/nacl${gcc_suffix}-ld ${flags}" \
-    RANLIB="${tc_base}/nacl${gcc_suffix}-ranlib")
+    CC="${tc_base}/${gcc_arch}-nacl-gcc ${flags}" \
+    CXX="${tc_base}/${gcc_arch}-nacl-g++ ${flags}" \
+    LD="${tc_base}/${gcc_arch}-nacl-ld ${flags}" \
+    RANLIB="${tc_base}/${gcc_arch}-nacl-ranlib" \
+    OBJCOPY="${tc_base}/${gcc_arch}-nacl-objcopy")
 }
 
 tc-configure() {
@@ -99,7 +100,7 @@ tc-install() {
   # TODO(dschuff) do the install step for gcc or decide we don't want it
   if [ $NACL_CC == "pnacl" ]; then
     cp ${INSTALL_DIR}/lib/libtcmalloc_minimal.a \
-      ${PNACL_TC_BASE}/../libs-bitcode
+      ${PNACL_TC_BASE}/../lib
       return $?
   fi
   return 0
@@ -143,6 +144,7 @@ fi
 
 if [ $1 == "all" ]; then
   echo "Using" $NACL_CC $NACL_ARCH $NEXE_SUFFIX
+  tc-clean && \
   tc-configure && \
   tc-make && \
   tc-install

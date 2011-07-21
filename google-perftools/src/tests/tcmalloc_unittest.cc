@@ -75,13 +75,9 @@
 #ifdef HAVE_FCNTL_H
 #include <fcntl.h>         // for open; used with mmap-hook test
 #endif
-#ifdef __native_client__
-// for size_t, off_t used by sys/mman.h
-#include <sys/types.h>
-#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>      // for testing mmap hooks
-#endif // HAVE_MMAP
+#endif
 #ifdef HAVE_MALLOC_H
 #include <malloc.h>        // defines pvalloc/etc on cygwin
 #endif
@@ -100,16 +96,45 @@
 
 // Windows doesn't define pvalloc and a few other obsolete unix
 // functions; nor does it define posix_memalign (which is not obsolete).
-#if defined(_MSC_VER) || defined(__MINGW32__)
+#if defined(_WIN32)
 # define cfree free         // don't bother to try to test these obsolete fns
 # define valloc malloc
 # define pvalloc malloc
 // I'd like to map posix_memalign to _aligned_malloc, but _aligned_malloc
 // must be paired with _aligned_free (not normal free), which is too
 // invasive a change to how we allocate memory here.  So just bail
-# include <errno.h>
-# define memalign(alignment, size)         malloc(size)
-# define posix_memalign(pptr, align, size) ((*(pptr)=malloc(size)) ? 0 : ENOMEM)
+static bool kOSSupportsMemalign = false;
+static inline void* Memalign(size_t align, size_t size) {
+  //LOG(FATAL) << "memalign not supported on windows";
+  exit(1);
+}
+static inline int PosixMemalign(void** ptr, size_t align, size_t size) {
+  //LOG(FATAL) << "posix_memalign not supported on windows";
+  exit(1);
+}
+
+// OS X defines posix_memalign in some OS versions but not others;
+// it's confusing enough to check that it's easiest to just not to test.
+#elif defined(__APPLE__)
+static bool kOSSupportsMemalign = false;
+static inline void* Memalign(size_t align, size_t size) {
+  //LOG(FATAL) << "memalign not supported on OS X";
+  exit(1);
+}
+static inline int PosixMemalign(void** ptr, size_t align, size_t size) {
+  //LOG(FATAL) << "posix_memalign not supported on OS X";
+  exit(1);
+}
+
+#else
+static bool kOSSupportsMemalign = true;
+static inline void* Memalign(size_t align, size_t size) {
+  return memalign(align, size);
+}
+static inline int PosixMemalign(void** ptr, size_t align, size_t size) {
+  return posix_memalign(ptr, align, size);
+}
+
 #endif
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old
@@ -153,7 +178,12 @@ static const size_t kMaxSize = ~static_cast<size_t>(0);
 static const size_t kMaxSignedSize = ((size_t(1) << (kSizeBits-1)) - 1);
 
 static const size_t kNotTooBig = 100000;
-static const size_t kTooBig = kMaxSize;
+// We want an allocation that is definitely more than main memory.  OS
+// X has special logic to discard very big allocs before even passing
+// the request along to the user-defined memory allocator; we're not
+// interested in testing their logic, so we have to make sure we're
+// not *too* big.
+static const size_t kTooBig = kMaxSize - 100000;
 
 static int news_handled = 0;
 
@@ -263,16 +293,18 @@ int TestHarness::PickType() {
 
 class AllocatorState : public TestHarness {
  public:
-  explicit AllocatorState(int seed) : TestHarness(seed) {
-    CHECK_GE(FLAGS_memalign_max_fraction, 0);
-    CHECK_LE(FLAGS_memalign_max_fraction, 1);
-    CHECK_GE(FLAGS_memalign_min_fraction, 0);
-    CHECK_LE(FLAGS_memalign_min_fraction, 1);
-    double delta = FLAGS_memalign_max_fraction - FLAGS_memalign_min_fraction;
-    CHECK_GE(delta, 0);
-    memalign_fraction_ = (Uniform(10000)/10000.0 * delta +
-                          FLAGS_memalign_min_fraction);
-    //fprintf(LOGSTREAM, "memalign fraction: %f\n", memalign_fraction_);
+  explicit AllocatorState(int seed) : TestHarness(seed), memalign_fraction_(0) {
+    if (kOSSupportsMemalign) {
+      CHECK_GE(FLAGS_memalign_max_fraction, 0);
+      CHECK_LE(FLAGS_memalign_max_fraction, 1);
+      CHECK_GE(FLAGS_memalign_min_fraction, 0);
+      CHECK_LE(FLAGS_memalign_min_fraction, 1);
+      double delta = FLAGS_memalign_max_fraction - FLAGS_memalign_min_fraction;
+      CHECK_GE(delta, 0);
+      memalign_fraction_ = (Uniform(10000)/10000.0 * delta +
+                            FLAGS_memalign_min_fraction);
+      //fprintf(LOGSTREAM, "memalign fraction: %f\n", memalign_fraction_);
+    }
   }
   virtual ~AllocatorState() {}
 
@@ -286,7 +318,7 @@ class AllocatorState : public TestHarness {
             (size < sizeof(intptr_t) ||
              alignment < FLAGS_memalign_max_alignment_ratio * size)) {
           void *result = reinterpret_cast<void*>(static_cast<intptr_t>(0x1234));
-          int err = posix_memalign(&result, alignment, size);
+          int err = PosixMemalign(&result, alignment, size);
           if (err != 0) {
             CHECK_EQ(err, ENOMEM);
           }
@@ -709,14 +741,13 @@ static void TestNothrowNew(void* (*func)(size_t, const std::nothrow_t&)) {
     CHECK_GT(g_##hook_type##_calls, 0);                                 \
     g_##hook_type##_calls = 0;  /* reset for next call */               \
   }                                                                     \
-  static MallocHook::hook_type g_old_##hook_type;                       \
   static void Set##hook_type() {                                        \
-    g_old_##hook_type = MallocHook::Set##hook_type(                     \
-     (MallocHook::hook_type)&IncrementCallsTo##hook_type);              \
+    CHECK(MallocHook::Add##hook_type(                                   \
+        (MallocHook::hook_type)&IncrementCallsTo##hook_type));          \
   }                                                                     \
   static void Reset##hook_type() {                                      \
-    CHECK_EQ(MallocHook::Set##hook_type(g_old_##hook_type),             \
-             (MallocHook::hook_type)&IncrementCallsTo##hook_type);      \
+    CHECK(MallocHook::Remove##hook_type(                                \
+        (MallocHook::hook_type)&IncrementCallsTo##hook_type));          \
   }
 
 // We do one for each hook typedef in malloc_hook.h
@@ -782,7 +813,15 @@ static void RangeCallback(void* arg, const base::MallocRange* r) {
   RangeCallbackState* state = reinterpret_cast<RangeCallbackState*>(arg);
   if (state->ptr >= r->address &&
       state->ptr < r->address + r->length) {
-    CHECK_EQ(r->type, state->expected_type);
+    if (state->expected_type == base::MallocRange::FREE) {
+      // We are expecting r->type == FREE, but ReleaseMemory
+      // may have already moved us to UNMAPPED state instead (this happens in
+      // approximately 0.1% of executions). Accept either state.
+      CHECK(r->type == base::MallocRange::FREE ||
+            r->type == base::MallocRange::UNMAPPED);
+    } else {
+      CHECK_EQ(r->type, state->expected_type);
+    }
     CHECK_GE(r->length, state->min_size);
     state->matched = true;
   }
@@ -888,7 +927,10 @@ static void TestReleaseToSystem() {
 #endif   // #ifndef DEBUGALLOCATION
 }
 
-bool g_no_memory = false;
+// On MSVC10, in release mode, the optimizer convinces itself
+// g_no_memory is never changed (I guess it doesn't realize OnNoMemory
+// might be called).  Work around this by setting the var volatile.
+volatile bool g_no_memory = false;
 std::new_handler g_old_handler = NULL;
 static void OnNoMemory() {
   g_no_memory = true;
@@ -898,44 +940,42 @@ static void OnNoMemory() {
 static void TestSetNewMode() {
   int old_mode = tc_set_new_mode(1);
 
-  // DebugAllocation will try to catch huge allocations.  We need to avoid this
-  // by requesting a smaller malloc block, that still can't be satisfied.
-  const size_t kHugeRequest = kTooBig - 1024;
-
   g_old_handler = std::set_new_handler(&OnNoMemory);
   g_no_memory = false;
-  void* ret = malloc(kHugeRequest);
+  void* ret = malloc(kTooBig);
   EXPECT_EQ(NULL, ret);
   EXPECT_TRUE(g_no_memory);
 
   g_old_handler = std::set_new_handler(&OnNoMemory);
   g_no_memory = false;
-  ret = calloc(1, kHugeRequest);
+  ret = calloc(1, kTooBig);
   EXPECT_EQ(NULL, ret);
   EXPECT_TRUE(g_no_memory);
 
   g_old_handler = std::set_new_handler(&OnNoMemory);
   g_no_memory = false;
-  ret = realloc(NULL, kHugeRequest);
+  ret = realloc(NULL, kTooBig);
   EXPECT_EQ(NULL, ret);
   EXPECT_TRUE(g_no_memory);
 
-  // Not really important, but must be small enough such that kAlignment +
-  // kHugeRequest does not overflow.
-  const int kAlignment = 1 << 5;
+  if (kOSSupportsMemalign) {
+    // Not really important, but must be small enough such that
+    // kAlignment + kTooBig does not overflow.
+    const int kAlignment = 1 << 5;
 
-  g_old_handler = std::set_new_handler(&OnNoMemory);
-  g_no_memory = false;
-  ret = memalign(kAlignment, kHugeRequest);
-  EXPECT_EQ(NULL, ret);
-  EXPECT_TRUE(g_no_memory);
+    g_old_handler = std::set_new_handler(&OnNoMemory);
+    g_no_memory = false;
+    ret = Memalign(kAlignment, kTooBig);
+    EXPECT_EQ(NULL, ret);
+    EXPECT_TRUE(g_no_memory);
 
-  g_old_handler = std::set_new_handler(&OnNoMemory);
-  g_no_memory = false;
-  EXPECT_EQ(ENOMEM,
-            posix_memalign(&ret, kAlignment, kHugeRequest));
-  EXPECT_EQ(NULL, ret);
-  EXPECT_TRUE(g_no_memory);
+    g_old_handler = std::set_new_handler(&OnNoMemory);
+    g_no_memory = false;
+    EXPECT_EQ(ENOMEM,
+              PosixMemalign(&ret, kAlignment, kTooBig));
+    EXPECT_EQ(NULL, ret);
+    EXPECT_TRUE(g_no_memory);
+  }
 
   tc_set_new_mode(old_mode);
 }
@@ -1016,6 +1056,7 @@ static int RunAllTests(int argc, char** argv) {
     SetDeleteHook();   // ditto
 
     void* p1 = malloc(10);
+    CHECK(p1 != NULL);    // force use of this variable
     VerifyNewHookWasCalled();
     // Also test the non-standard tc_malloc_size
     size_t actual_p1_size = tc_malloc_size(p1);
@@ -1026,22 +1067,31 @@ static int RunAllTests(int argc, char** argv) {
 
 
     p1 = calloc(10, 2);
+    CHECK(p1 != NULL);
     VerifyNewHookWasCalled();
-    p1 = realloc(p1, 30);
+    // We make sure we realloc to a big size, since some systems (OS
+    // X) will notice if the realloced size continues to fit into the
+    // malloc-block and make this a noop if so.
+    p1 = realloc(p1, 30000);
+    CHECK(p1 != NULL);
     VerifyNewHookWasCalled();
     VerifyDeleteHookWasCalled();
     cfree(p1);  // synonym for free
     VerifyDeleteHookWasCalled();
 
-    CHECK_EQ(posix_memalign(&p1, sizeof(p1), 40), 0);
-    VerifyNewHookWasCalled();
-    free(p1);
-    VerifyDeleteHookWasCalled();
+    if (kOSSupportsMemalign) {
+      CHECK_EQ(PosixMemalign(&p1, sizeof(p1), 40), 0);
+      CHECK(p1 != NULL);
+      VerifyNewHookWasCalled();
+      free(p1);
+      VerifyDeleteHookWasCalled();
 
-    p1 = memalign(sizeof(p1) * 2, 50);
-    VerifyNewHookWasCalled();
-    free(p1);
-    VerifyDeleteHookWasCalled();
+      p1 = Memalign(sizeof(p1) * 2, 50);
+      CHECK(p1 != NULL);
+      VerifyNewHookWasCalled();
+      free(p1);
+      VerifyDeleteHookWasCalled();
+    }
 
     // Windows has _aligned_malloc.  Let's test that that's captured too.
 #if (defined(_MSC_VER) || defined(__MINGW32__)) && !defined(PERFTOOLS_NO_ALIGNED_MALLOC)
@@ -1052,46 +1102,63 @@ static int RunAllTests(int argc, char** argv) {
 #endif
 
     p1 = valloc(60);
+    CHECK(p1 != NULL);
     VerifyNewHookWasCalled();
     free(p1);
     VerifyDeleteHookWasCalled();
 
     p1 = pvalloc(70);
+    CHECK(p1 != NULL);
     VerifyNewHookWasCalled();
     free(p1);
     VerifyDeleteHookWasCalled();
 
     char* p2 = new char;
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     delete p2;
     VerifyDeleteHookWasCalled();
 
     p2 = new char[100];
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     delete[] p2;
     VerifyDeleteHookWasCalled();
 
     p2 = new(std::nothrow) char;
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     delete p2;
     VerifyDeleteHookWasCalled();
 
     p2 = new(std::nothrow) char[100];
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     delete[] p2;
     VerifyDeleteHookWasCalled();
 
     // Another way of calling operator new
     p2 = static_cast<char*>(::operator new(100));
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     ::operator delete(p2);
     VerifyDeleteHookWasCalled();
 
     // Try to call nothrow's delete too.  Compilers use this.
     p2 = static_cast<char*>(::operator new(100, std::nothrow));
+    CHECK(p2 != NULL);
     VerifyNewHookWasCalled();
     ::operator delete(p2, std::nothrow);
     VerifyDeleteHookWasCalled();
+
+    // Try strdup(), which the system allocates but we must free.  If
+    // all goes well, libc will use our malloc!
+    p2 = strdup("test");
+    CHECK(p2 != NULL);
+    VerifyNewHookWasCalled();
+    free(p2);
+    VerifyDeleteHookWasCalled();
+
 
     // Test mmap too: both anonymous mmap and mmap of a file
     // Note that for right now we only override mmap on linux
@@ -1104,8 +1171,10 @@ static int RunAllTests(int argc, char** argv) {
     int size = 8192*2;
     p1 = mmap(NULL, size, PROT_WRITE|PROT_READ, MAP_ANONYMOUS|MAP_PRIVATE,
               -1, 0);
+    CHECK(p1 != NULL);
     VerifyMmapHookWasCalled();
     p1 = mremap(p1, size, size/2, 0);
+    CHECK(p1 != NULL);
     VerifyMremapHookWasCalled();
     size /= 2;
     munmap(p1, size);
@@ -1114,6 +1183,7 @@ static int RunAllTests(int argc, char** argv) {
     int fd = open("/dev/zero", O_RDONLY);
     CHECK_GE(fd, 0);   // make sure the open succeeded
     p1 = mmap(NULL, 8192, PROT_READ, MAP_SHARED, fd, 0);
+    CHECK(p1 != NULL);
     VerifyMmapHookWasCalled();
     munmap(p1, 8192);
     VerifyMunmapHookWasCalled();
@@ -1132,11 +1202,14 @@ static int RunAllTests(int argc, char** argv) {
 #if defined(HAVE_SBRK) && defined(__linux) && \
        (defined(__i386__) || defined(__x86_64__))
     p1 = sbrk(8192);
+    CHECK(p1 != NULL);
     VerifySbrkHookWasCalled();
     p1 = sbrk(-8192);
+    CHECK(p1 != NULL);
     VerifySbrkHookWasCalled();
     // However, sbrk hook should *not* be called with sbrk(0)
     p1 = sbrk(0);
+    CHECK(p1 != NULL);
     CHECK_EQ(g_SbrkHook_calls, 0);
 #else   // this is just to quiet the compiler: make sure all fns are called
     IncrementCallsToSbrkHook();

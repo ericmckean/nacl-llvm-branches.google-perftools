@@ -387,7 +387,7 @@
 #undef ANNOTALYSIS_STATIC_INLINE
 #define ANNOTALYSIS_STATIC_INLINE static inline
 #undef ANNOTALYSIS_SEMICOLON_OR_EMPTY_BODY
-#define ANNOTALYSIS_SEMICOLON_OR_EMPTY_BODY {}
+#define ANNOTALYSIS_SEMICOLON_OR_EMPTY_BODY { (void)file; (void)line; }
 #endif
 #define ANNOTALYSIS_IGNORE_READS_BEGIN   __attribute__ ((ignore_reads_begin))
 #define ANNOTALYSIS_IGNORE_READS_END     __attribute__ ((ignore_reads_end))
@@ -495,14 +495,14 @@ void AnnotateFlushState(const char *file, int line);
   If for some reason you can't use "valgrind.h" or want to fake valgrind,
   there are two ways to make this function return non-zero:
     - Use environment variable: export RUNNING_ON_VALGRIND=1
-    - Make your tool intercept the function TCRunningOnValgrind() and
+    - Make your tool intercept the function RunningOnValgrind() and
       change its return value.
  */
-int TCRunningOnValgrind(void);
+int RunningOnValgrind(void);
 
 /* ValgrindSlowdown returns:
-    * 1.0, if (TCRunningOnValgrind() == 0)
-    * 50.0, if (TCRunningOnValgrind() != 0 && getenv("VALGRIND_SLOWDOWN") == NULL)
+    * 1.0, if (RunningOnValgrind() == 0)
+    * 50.0, if (RunningOnValgrind() != 0 && getenv("VALGRIND_SLOWDOWN") == NULL)
     * atof(getenv("VALGRIND_SLOWDOWN")) otherwise
    This function can be used to scale timeout values:
    EXAMPLE:

@@ -38,20 +38,26 @@
 #ifdef __linux
 
 #include <config.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <inttypes.h>
-#include <sys/mman.h>
-#include <sys/param.h>
-#include <sys/types.h>
-#include <sys/vfs.h>           // for statfs
+#include <errno.h>                      // for errno, EINVAL
+#include <inttypes.h>                   // for PRId64
+#include <limits.h>                     // for PATH_MAX
+#include <stddef.h>                     // for size_t, NULL
+#ifdef HAVE_STDINT_H
+#include <stdint.h>                     // for int64_t, uintptr_t
+#endif
+#include <stdio.h>                      // for snprintf
+#include <stdlib.h>                     // for mkstemp
+#include <string.h>                     // for strerror
+#include <sys/mman.h>                   // for mmap, MAP_FAILED, etc
+#include <sys/statfs.h>                 // for fstatfs, statfs
+#include <unistd.h>                     // for ftruncate, off_t, unlink
+#include <new>                          // for operator new
 #include <string>
 
+#include <google/malloc_extension.h>
 #include "base/basictypes.h"
 #include "base/googleinit.h"
 #include "base/sysinfo.h"
-#include "system-alloc.h"
 #include "internal_logging.h"
 
 using std::string;
@@ -71,55 +77,75 @@ DEFINE_bool(memfs_malloc_abort_on_fail,
 DEFINE_bool(memfs_malloc_ignore_mmap_fail,
             EnvToBool("TCMALLOC_MEMFS_IGNORE_MMAP_FAIL", false),
             "Ignore failures from mmap");
+DEFINE_bool(memfs_malloc_map_private,
+            EnvToBool("TCMALLOC_MEMFS_MAP_PRIVATE", false),
+	    "Use MAP_PRIVATE with mmap");
 
 // Hugetlbfs based allocator for tcmalloc
 class HugetlbSysAllocator: public SysAllocator {
 public:
-  HugetlbSysAllocator(int fd, int page_size)
-    : big_page_size_(page_size),
-      hugetlb_fd_(fd),
-      hugetlb_base_(0) {
+  explicit HugetlbSysAllocator(SysAllocator* fallback)
+    : failed_(true),  // To disable allocator until Initialize() is called.
+      big_page_size_(0),
+      hugetlb_fd_(-1),
+      hugetlb_base_(0),
+      fallback_(fallback) {
   }
 
   void* Alloc(size_t size, size_t *actual_size, size_t alignment);
+  bool Initialize();
 
-  void DumpStats(TCMalloc_Printer* printer);
+  bool failed_;          // Whether failed to allocate memory.
 
 private:
-  int64 big_page_size_;
-  int hugetlb_fd_;      // file descriptor for hugetlb
-  off_t hugetlb_base_;
-};
+  void* AllocInternal(size_t size, size_t *actual_size, size_t alignment);
 
-void HugetlbSysAllocator::DumpStats(TCMalloc_Printer* printer) {
-  printer->printf("HugetlbSysAllocator: failed_=%d allocated=%"PRId64"\n",
-                  failed_, static_cast<int64_t>(hugetlb_base_));
-}
+  int64 big_page_size_;
+  int hugetlb_fd_;       // file descriptor for hugetlb
+  off_t hugetlb_base_;
+
+  SysAllocator* fallback_;  // Default system allocator to fall back to.
+};
+static char hugetlb_space[sizeof(HugetlbSysAllocator)];
 
 // No locking needed here since we assume that tcmalloc calls
 // us with an internal lock held (see tcmalloc/system-alloc.cc).
 void* HugetlbSysAllocator::Alloc(size_t size, size_t *actual_size,
                                  size_t alignment) {
-
-  // don't go any further if we haven't opened the backing file
-  if (hugetlb_fd_ == -1) {
-    return NULL;
+  if (failed_) {
+    return fallback_->Alloc(size, actual_size, alignment);
   }
 
   // We don't respond to allocation requests smaller than big_page_size_ unless
-  // the caller is willing to take more than they asked for.
+  // the caller is ok to take more than they asked for. Used by MetaDataAlloc.
   if (actual_size == NULL && size < big_page_size_) {
-    return NULL;
+    return fallback_->Alloc(size, actual_size, alignment);
   }
 
   // Enforce huge page alignment.  Be careful to deal with overflow.
-  if (alignment < big_page_size_) alignment = big_page_size_;
-  size_t aligned_size = ((size + alignment - 1) / alignment) * alignment;
+  size_t new_alignment = alignment;
+  if (new_alignment < big_page_size_) new_alignment = big_page_size_;
+  size_t aligned_size = ((size + new_alignment - 1) /
+                         new_alignment) * new_alignment;
   if (aligned_size < size) {
-    return NULL;
+    return fallback_->Alloc(size, actual_size, alignment);
   }
-  size = aligned_size;
 
+  void* result = AllocInternal(aligned_size, actual_size, new_alignment);
+  if (result != NULL) {
+    return result;
+  }
+  TCMalloc_MESSAGE(__FILE__, __LINE__,
+                   "HugetlbSysAllocator: failed_=%d allocated=%"PRId64"\n",
+                   failed_, static_cast<int64_t>(hugetlb_base_));
+  if (FLAGS_memfs_malloc_abort_on_fail) {
+    CRASH("memfs_malloc_abort_on_fail is set\n");
+  }
+  return fallback_->Alloc(size, actual_size, alignment);
+}
+
+void* HugetlbSysAllocator::AllocInternal(size_t size, size_t* actual_size,
+                                         size_t alignment) {
   // Ask for extra memory if alignment > pagesize
   size_t extra = 0;
   if (alignment > big_page_size_) {
@@ -139,9 +165,6 @@ void* HugetlbSysAllocator::Alloc(size_t size, size_t *actual_size,
                        " too large while %"PRId64" bytes remain\n",
                        size, static_cast<int64_t>(limit - hugetlb_base_));
     }
-    if (FLAGS_memfs_malloc_abort_on_fail) {
-      CRASH("memfs_malloc_abort_on_fail is set\n");
-    }
     return NULL;
   }
 
@@ -152,9 +175,6 @@ void* HugetlbSysAllocator::Alloc(size_t size, size_t *actual_size,
     TCMalloc_MESSAGE(__FILE__, __LINE__, "ftruncate failed: %s\n",
                      strerror(errno));
     failed_ = true;
-    if (FLAGS_memfs_malloc_abort_on_fail) {
-      CRASH("memfs_malloc_abort_on_fail is set\n");
-    }
     return NULL;
   }
 
@@ -162,16 +182,15 @@ void* HugetlbSysAllocator::Alloc(size_t size, size_t *actual_size,
   //            size + alignment < (1<<NBITS).
   // and        extra <= alignment
   // therefore  size + extra < (1<<NBITS)
-  void *result = mmap(0, size + extra, PROT_WRITE|PROT_READ,
-                      MAP_SHARED, hugetlb_fd_, hugetlb_base_);
+  void *result;
+  result = mmap(0, size + extra, PROT_WRITE|PROT_READ,
+                FLAGS_memfs_malloc_map_private ? MAP_PRIVATE : MAP_SHARED,
+                hugetlb_fd_, hugetlb_base_);
   if (result == reinterpret_cast<void*>(MAP_FAILED)) {
     if (!FLAGS_memfs_malloc_ignore_mmap_fail) {
       TCMalloc_MESSAGE(__FILE__, __LINE__, "mmap of size %"PRIuS" failed: %s\n",
                        size + extra, strerror(errno));
       failed_ = true;
-      if (FLAGS_memfs_malloc_abort_on_fail) {
-        CRASH("memfs_malloc_abort_on_fail is set\n");
-      }
     }
     return NULL;
   }
@@ -192,43 +211,53 @@ void* HugetlbSysAllocator::Alloc(size_t size, size_t *actual_size,
   return reinterpret_cast<void*>(ptr);
 }
 
-static void InitSystemAllocator() {
-  if (FLAGS_memfs_malloc_path.length()) {
-    char path[PATH_MAX];
-    int rc = snprintf(path, sizeof(path), "%s.XXXXXX",
-                      FLAGS_memfs_malloc_path.c_str());
-    if (rc < 0 || rc >= sizeof(path)) {
-      CRASH("XX fatal: memfs_malloc_path too long\n");
-    }
-
-    int hugetlb_fd = mkstemp(path);
-    if (hugetlb_fd == -1) {
-      TCMalloc_MESSAGE(__FILE__, __LINE__,
-                       "warning: unable to create memfs_malloc_path %s: %s\n",
-                       path, strerror(errno));
-      return;
-    }
-
-    // Cleanup memory on process exit
-    if (unlink(path) == -1) {
-      CRASH("fatal: error unlinking memfs_malloc_path %s: %s\n",
-            path, strerror(errno));
-    }
-
-    // Use fstatfs to figure out the default page size for memfs
-    struct statfs sfs;
-    if (fstatfs(hugetlb_fd, &sfs) == -1) {
-      CRASH("fatal: error fstatfs of memfs_malloc_path: %s\n",
-            strerror(errno));
-    }
-    int64 page_size = sfs.f_bsize;
-
-    SysAllocator *alloc = new HugetlbSysAllocator(hugetlb_fd, page_size);
-    // Register ourselves with tcmalloc
-    RegisterSystemAllocator(alloc, 0);
+bool HugetlbSysAllocator::Initialize() {
+  char path[PATH_MAX];
+  int rc = snprintf(path, sizeof(path), "%s.XXXXXX",
+                    FLAGS_memfs_malloc_path.c_str());
+  if (rc < 0 || rc >= sizeof(path)) {
+    CRASH("XX fatal: memfs_malloc_path too long\n");
+    return false;
   }
+
+  int hugetlb_fd = mkstemp(path);
+  if (hugetlb_fd == -1) {
+    TCMalloc_MESSAGE(__FILE__, __LINE__,
+                     "warning: unable to create memfs_malloc_path %s: %s\n",
+                     path, strerror(errno));
+    return false;
+  }
+
+  // Cleanup memory on process exit
+  if (unlink(path) == -1) {
+    CRASH("fatal: error unlinking memfs_malloc_path %s: %s\n",
+          path, strerror(errno));
+    return false;
+  }
+
+  // Use fstatfs to figure out the default page size for memfs
+  struct statfs sfs;
+  if (fstatfs(hugetlb_fd, &sfs) == -1) {
+    CRASH("fatal: error fstatfs of memfs_malloc_path: %s\n",
+          strerror(errno));
+    return false;
+  }
+  int64 page_size = sfs.f_bsize;
+
+  hugetlb_fd_ = hugetlb_fd;
+  big_page_size_ = page_size;
+  failed_ = false;
+  return true;
 }
 
-REGISTER_MODULE_INITIALIZER(memfs_malloc, { InitSystemAllocator(); });
+REGISTER_MODULE_INITIALIZER(memfs_malloc, {
+  if (FLAGS_memfs_malloc_path.length()) {
+    SysAllocator* alloc = MallocExtension::instance()->GetSystemAllocator();
+    HugetlbSysAllocator* hp = new (hugetlb_space) HugetlbSysAllocator(alloc);
+    if (hp->Initialize()) {
+      MallocExtension::instance()->SetSystemAllocator(hp);
+    }
+  }
+});
 
 #endif   /* ifdef __linux */

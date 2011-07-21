@@ -36,13 +36,11 @@
 #define TCMALLOC_COMMON_H_
 
 #include "config.h"
-#include <stddef.h>
+#include <stddef.h>                     // for size_t
 #ifdef HAVE_STDINT_H
-#include <stdint.h>
+#include <stdint.h>                     // for uintptr_t, uint64_t
 #endif
-#include <stdarg.h>
-#include "base/commandlineflags.h"
-#include "internal_logging.h"
+#include "internal_logging.h"  // for ASSERT, etc
 
 // Type that can hold a page number
 typedef uintptr_t PageID;
@@ -65,23 +63,28 @@ typedef uintptr_t Length;
 
 #if defined(TCMALLOC_LARGE_PAGES)
 static const size_t kPageShift  = 15;
-static const size_t kNumClasses = 95;
-static const size_t kMaxThreadCacheSize = 4 << 20;
+static const size_t kNumClasses = 78;
 #else
-static const size_t kPageShift  = 12;
-static const size_t kNumClasses = 61;
-static const size_t kMaxThreadCacheSize = 2 << 20;
+static const size_t kPageShift  = 13;
+static const size_t kNumClasses = 86;
 #endif
+static const size_t kMaxThreadCacheSize = 4 << 20;
 
 static const size_t kPageSize   = 1 << kPageShift;
-static const size_t kMaxSize    = 8u * kPageSize;
+static const size_t kMaxSize    = 256 * 1024;
 static const size_t kAlignment  = 8;
 static const size_t kLargeSizeClass = 0;
 // For all span-lengths < kMaxPages we keep an exact-size list.
 static const size_t kMaxPages = 1 << (20 - kPageShift);
 
 // Default bound on the total amount of thread caches.
+#ifdef TCMALLOC_SMALL_BUT_SLOW
+// Make the overall thread cache no bigger than that of a single thread
+// for the small memory footprint case.
+static const size_t kDefaultOverallThreadCacheSize = kMaxThreadCacheSize;
+#else
 static const size_t kDefaultOverallThreadCacheSize = 8u * kMaxThreadCacheSize;
+#endif
 
 // Lower bound on the per-thread cache sizes
 static const size_t kMinThreadCacheSize = kMaxSize * 2;
@@ -110,7 +113,7 @@ static const Length kMaxValidPages = (~static_cast<Length>(0)) >> kPageShift;
 // TODO(rus): Under what operating systems can we increase it safely to 17?
 // This lets us use smaller page maps.  On first allocation, a 36-bit page map
 // uses only 96 KB instead of the 4.5 MB used by a 52-bit page map.
-static const int kAddressBits = 48;
+static const int kAddressBits = (sizeof(void*) < 8 ? (8 * sizeof(void*)) : 48);
 #else
 static const int kAddressBits = 8 * sizeof(void*);
 #endif
@@ -162,7 +165,7 @@ class SizeMap {
   //   32768      (32768 + 127 + (120<<7)) / 128  376
   static const int kMaxSmallSize = 1024;
   static const size_t kClassArraySize =
-      (((1 << kPageShift) * 8u + 127 + (120 << 7)) >> 7) + 1;
+      ((kMaxSize + 127 + (120 << 7)) >> 7) + 1;
   unsigned char class_array_[kClassArraySize];
 
   // Compute index of the class_array[] entry for a given size

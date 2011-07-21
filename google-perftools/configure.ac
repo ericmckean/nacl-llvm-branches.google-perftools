@@ -4,11 +4,11 @@
 # make sure we're interpreted by some minimal autoconf
 AC_PREREQ(2.57)
 
-AC_INIT(google-perftools, 1.7, opensource@google.com)
+AC_INIT(google-perftools, 1.8, opensource@google.com)
 # Update this value for every release!  (A:B:C will map to foo.so.(A-C).C.B)
 # http://www.gnu.org/software/libtool/manual/html_node/Updating-version-info.html
-TCMALLOC_SO_VERSION=1:0:1
-PROFILER_SO_VERSION=1:0:1
+TCMALLOC_SO_VERSION=2:0:2
+PROFILER_SO_VERSION=1:1:1
 
 AC_SUBST(TCMALLOC_SO_VERSION)
 AC_SUBST(PROFILER_SO_VERSION)
@@ -90,17 +90,16 @@ AC_PROG_CXX
 AM_CONDITIONAL(GCC, test "$GCC" = yes)   # let the Makefile know if we're gcc
 AM_PROG_CC_C_O      # shrug: autogen.sh suddenly needs this for some reason
 
-case $host in
-  *nacl*)
-    ;; # nacl-gcc has objcopy, but it's not detected right by configure, so it
-       # falls back to native objcopy, which doesn't understand nexes.
-       # pnacl has no objcopy, so the result is the same.
-  *)
-    # Check if we have an objcopy installed that supports -W
-    AC_CHECK_TOOL([OBJCOPY], [objcopy], [])
-    ;;
-esac
-    AM_CONDITIONAL(HAVE_OBJCOPY_WEAKEN, ["$OBJCOPY" -W malloc /bin/ls /dev/null])
+# Check if we have an objcopy installed that supports -W
+AC_CHECK_TOOL([OBJCOPY], [objcopy], [])
+AS_IF([test -n "$OBJCOPY"], [dnl
+  AC_CACHE_CHECK([if $OBJCOPY supports -W], gpt_cv_objcopy_weaken, [dnl
+    AC_LINK_IFELSE([void foo() {} int main() {return 0;}], [dnl
+      AS_IF(["$OBJCOPY" -W foo conftest$ac_exeext /dev/null],
+      	    [gpt_cv_objcopy_weaken=yes], [gpt_cv_objcopy_weaken=no])],
+    [gpt_cv_objcopy_weaken=no])])],
+  [gpt_cv_objcopy_weaken=no])
+AM_CONDITIONAL(HAVE_OBJCOPY_WEAKEN, test $gpt_cv_objcopy_weaken = yes)
 
 case $host_os in
   *mingw*)
@@ -133,6 +132,8 @@ AC_CHECK_FUNCS(sbrk)            # for tcmalloc to get memory
 AC_CHECK_FUNCS(geteuid)         # for turning off services when run as root
 AC_CHECK_HEADERS(features.h)    # for vdso_support.h
 AC_CHECK_HEADERS(malloc.h)      # some systems define stuff there, others not
+AC_CHECK_HEADERS(sys/malloc.h)  # where some versions of OS X put malloc.h
+AC_CHECK_HEADERS(malloc/malloc.h)  # another place OS X puts malloc.h (?)
 AC_CHECK_HEADERS(glob.h)        # for heap-profile-table (cleaning up profiles)
 AC_CHECK_HEADERS(execinfo.h)    # for stacktrace? and heapchecker_unittest
 AC_CHECK_HEADERS(libunwind.h)   # for stacktrace
@@ -149,7 +150,10 @@ AC_CHECK_HEADERS(fcntl.h)       # for tcmalloc_unittest
 AC_CHECK_HEADERS(grp.h)         # for heapchecker_unittest
 AC_CHECK_HEADERS(pwd.h)         # for heapchecker_unittest
 # detect nacl newlib/glibc
-AC_CHECK_HEADERS(newlib.h, [LIBS=${LIBS}"-lnosys -lm"])
+# we use lpthread for everything because RunningOnValgrind is in there for
+# some reason, and that definition conflicts with the one in here, so we
+# just #ifdef it out here
+AC_CHECK_HEADERS(newlib.h, [LIBS=${LIBS}"-lpthread -lnosys -lm"])
 echo $LIBS
 case "$host" in
    *nacl*) 
@@ -157,13 +161,17 @@ case "$host" in
         # it doesn't declare getrlimit so the build fails
         # nacl-gcc has a declaration so the build works, but nacl doesn't
         # support getrlimit anyway
+        # nacl glibc has errors when including cdefs.h (bug 2046)
    *)
       AC_CHECK_HEADERS(sys/resource.h)         # for memalign_unittest.cc
+      AC_CHECK_HEADERS(sys/cdefs.h)   # Where glibc defines __THROW
      ;;
 esac
 
 
 AC_CHECK_HEADERS(valgrind.h)    # we have a local copy if this isn't found
+
+AC_CHECK_HEADERS(features.h)    # Where __GLIBC__ is defined
 # We also need <ucontext.h>/<sys/ucontext.h>, but we get those from
 # AC_PC_FROM_UCONTEXT, below.
 
@@ -190,14 +198,15 @@ fi
 # This workaround comes from
 #    http://cygwin.com/ml/cygwin/2004-11/msg00138.html
 case "$host" in
-  *-*-cygwin*) ac_cv_func_mmap_fixed_mapped=yes
+  *-*-cygwin*)
+	       ac_cv_func_mmap_fixed_mapped=yes
                AC_DEFINE(HAVE_MMAP, 1,
                          [Define to 1 if you have a working `mmap' system call.])
                ;;
   # nacl has mmap, but the autoconf test doesn't detect it.
-  *nacl*) AC_DEFINE(HAVE_MMAP, 1,
+       *nacl*) AC_DEFINE(HAVE_MMAP, 1,
                     [Define to 1 if you have a working `mmap' system call.])
-           ;;
+               ;;
             *) AC_FUNC_MMAP
                ;;
 esac
@@ -254,6 +263,24 @@ AM_CONDITIONAL(X86_64_AND_NO_FP_BY_DEFAULT,
 rm fp.s
 CFLAGS="$OLD_CFLAGS"
 
+# See if the compiler supports -Wno-unused-result.
+# Newer ubuntu's turn on -D_FORTIFY_SOURCE=2, enabling
+# __attribute__((warn_unused_result)) for things like write(),
+# which we don't care about.
+AC_CACHE_CHECK([if the compiler supports -Wno-unused-result],
+               perftools_cv_w_no_unused_result,
+	       [OLD_CFLAGS="$CFLAGS"
+	        CFLAGS="$CFLAGS -Wno-error -Wno-unused-result"
+		# gcc doesn't warn about unknown flags unless it's
+		# also warning for some other purpose, hence the
+		# divide-by-0.  (We use -Wno-error to make sure the
+		# divide-by-0 doesn't cause this test to fail!)
+	        AC_COMPILE_IFELSE([AC_LANG_PROGRAM(, return 1/0)],
+	                          perftools_cv_w_no_unused_result=yes,
+                                  perftools_cv_w_no_unused_result=no)
+	        CFLAGS="$OLD_CFLAGS"])
+AM_CONDITIONAL(HAVE_W_NO_UNUSED_RESULT,
+	       test "$perftools_cv_w_no_unused_result" = yes)
 
 # Defines PRIuS
 AC_COMPILER_CHARACTERISTICS
@@ -292,9 +319,19 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([#if defined(__GNUC__) && (defined(__i386__) || 
 #error gcc has this bug: http://gcc.gnu.org/ml/gcc-bugs/2006-09/msg02275.html
 #endif], [static __thread int p = 0])],
                [AC_DEFINE(HAVE_TLS, 1,
-                      Define to 1 if compiler supports __thread)
+                          Define to 1 if compiler supports __thread)
                 AC_MSG_RESULT([yes])],
                [AC_MSG_RESULT([no])])
+
+# glibc's __malloc_hook/etc were declared volatile starting in glibc 2.14
+AC_MSG_CHECKING([if __malloc_hook is declared volatile])
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <malloc.h>
+void* (* volatile __malloc_hook)(size_t, const void*) = 0;],)],
+                  [AC_DEFINE(MALLOC_HOOK_MAYBE_VOLATILE, volatile,
+                             Define to 'volatile' if __malloc_hook is declared volatile)
+                   AC_MSG_RESULT([yes])],
+                  [AC_DEFINE(MALLOC_HOOK_MAYBE_VOLATILE, ),
+                   AC_MSG_RESULT([no])])
 
 # Nanosleep requires extra libraries on some architectures (solaris).
 # This sets NANOSLEEP_LIBS.  nanosleep doesn't exist on mingw, which
@@ -350,10 +387,20 @@ AH_TOP([
 #define GOOGLE_PERFTOOLS_CONFIG_H_
 ])
 
+AH_VERBATIM([PTHREADS_CRASHES_IF_RUN_TOO_EARLY],
+	    [/* Mark the systems where we know it's bad if pthreads runs too
+   early before main (before threads are initialized, presumably).  */
+#ifdef __FreeBSD__
+#define PTHREADS_CRASHES_IF_RUN_TOO_EARLY 1
+#endif])
+
 # MinGW uses autoconf, but also needs the windows shim routines
 # (since it doesn't have its own support for, say, pthreads).
 # This requires us to #include a special header file, and also to
 # link in some windows versions of .o's instead of the unix versions.
+#
+# Also, manually mark systems where we have to be careful how early
+# we run pthreads.  TODO(csilvers): turn this into an autoconf check.
 AH_BOTTOM([
 #ifdef __MINGW32__
 #include "windows/mingw.h"
@@ -362,6 +409,7 @@ AH_BOTTOM([
 #endif  /* #ifndef GOOGLE_PERFTOOLS_CONFIG_H_ */
 ])
 AM_CONDITIONAL(MINGW, expr $host : '.*-mingw' >/dev/null 2>&1)
+AM_CONDITIONAL(OSX, expr $host : '.*-apple-darwin.*' >/dev/null 2>&1)
 
 # Redhat 7 (and below?) has sys/ucontext.h, but if you try to #include
 # it directly, the compiler gets upset.  So we pretend we don't have
@@ -387,5 +435,5 @@ AM_CONDITIONAL(WITH_STACK_TRACE, test "$enable_cpu_profiler" = yes -o \
                                       "$enable_heap_checker" = yes)
 
 # Write generated configuration file
-AC_CONFIG_FILES([Makefile src/google/tcmalloc.h])
+AC_CONFIG_FILES([Makefile src/google/tcmalloc.h src/windows/google/tcmalloc.h])
 AC_OUTPUT

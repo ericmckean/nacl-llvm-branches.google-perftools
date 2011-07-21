@@ -32,7 +32,6 @@
 
 #include <config.h>
 #include <assert.h>
-#include <stdio.h>
 #include <string.h>
 #include <stdio.h>
 #if defined HAVE_STDINT_H
@@ -49,6 +48,7 @@
 #include "google/heap-checker.h"
 #endif
 #include "google/malloc_extension.h"
+#include "google/malloc_extension_c.h"
 #include "maybe_threads.h"
 
 using STL_NAMESPACE::string;
@@ -102,6 +102,9 @@ void MallocExtension::Initialize() {
 #endif  /* __GLIBC__ */
 }
 
+// SysAllocator implementation
+SysAllocator::~SysAllocator() {}
+
 // Default implementation -- does nothing
 MallocExtension::~MallocExtension() { }
 bool MallocExtension::VerifyAllMemory() { return true; }
@@ -146,6 +149,14 @@ void MallocExtension::MarkThreadBusy() {
   // Default implementation does nothing
 }
 
+SysAllocator* MallocExtension::GetSystemAllocator() {
+  return NULL;
+}
+
+void MallocExtension::SetSystemAllocator(SysAllocator *a) {
+  // Default implementation does nothing
+}
+
 void MallocExtension::ReleaseToSystem(size_t num_bytes) {
   // Default implementation does nothing
 }
@@ -167,7 +178,12 @@ size_t MallocExtension::GetEstimatedAllocatedSize(size_t size) {
 }
 
 size_t MallocExtension::GetAllocatedSize(void* p) {
+  assert(GetOwnership(p) != kNotOwned);
   return 0;
+}
+
+MallocExtension::Ownership MallocExtension::GetOwnership(const void* p) {
+  return kUnknownOwnership;
 }
 
 void MallocExtension::GetFreeListSizes(
@@ -199,7 +215,7 @@ void MallocExtension::Register(MallocExtension* implementation) {
   // callers should be responsible for checking that they are the
   // malloc that is really being run, before calling Register.  This
   // is just here as an extra sanity check.)
-  if (!TCRunningOnValgrind()) {
+  if (!RunningOnValgrind()) {
     current_instance = implementation;
   }
 }
@@ -228,11 +244,11 @@ void PrintCountAndSize(MallocExtensionWriter* writer,
                        uintptr_t count, uintptr_t size) {
   char buf[100];
   snprintf(buf, sizeof(buf),
-           "%6lld: %8lld [%6lld: %8lld] @",
-           static_cast<long long>(count),
-           static_cast<long long>(size),
-           static_cast<long long>(count),
-           static_cast<long long>(size));
+           "%6"PRIu64": %8"PRIu64" [%6"PRIu64": %8"PRIu64"] @",
+           static_cast<uint64>(count),
+           static_cast<uint64>(size),
+           static_cast<uint64>(count),
+           static_cast<uint64>(size));
   writer->append(buf, strlen(buf));
 }
 
@@ -347,3 +363,10 @@ C_SHIM(ReleaseFreeMemory, void, (void), ());
 C_SHIM(ReleaseToSystem, void, (size_t num_bytes), (num_bytes));
 C_SHIM(GetEstimatedAllocatedSize, size_t, (size_t size), (size));
 C_SHIM(GetAllocatedSize, size_t, (void* p), (p));
+
+// Can't use the shim here because of the need to translate the enums.
+extern "C"
+MallocExtension_Ownership MallocExtension_GetOwnership(const void* p) {
+  return static_cast<MallocExtension_Ownership>(
+      MallocExtension::instance()->GetOwnership(p));
+}

@@ -43,13 +43,9 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
-#ifdef __native_client__
-// for size_t, off_t used by sys/mman.h
-#include <sys/types.h>
-#endif
 #ifdef HAVE_MMAP
 #include <sys/mman.h>
-#endif // HAVE_MMAP
+#endif
 #include <new>                   // for placement-new
 
 // On systems (like freebsd) that don't define MAP_ANONYMOUS, use the old
@@ -216,7 +212,7 @@ static const intptr_t kMagicAllocated = 0x4c833e95;
 static const intptr_t kMagicUnallocated = ~kMagicAllocated;
 
 namespace {
-  class ArenaLock {
+  class SCOPED_LOCKABLE ArenaLock {
    public:
     explicit ArenaLock(LowLevelAlloc::Arena *arena)
         EXCLUSIVE_LOCK_FUNCTION(arena->mu)
@@ -237,7 +233,7 @@ namespace {
       this->arena_->mu.Lock();
     }
     ~ArenaLock() { RAW_CHECK(this->left_, "haven't left Arena region"); }
-    void Leave() UNLOCK_FUNCTION(arena_->mu) {
+    void Leave() /*UNLOCK_FUNCTION()*/ {
       this->arena_->mu.Unlock();
 #if 0
       if (this->mask_valid_) {

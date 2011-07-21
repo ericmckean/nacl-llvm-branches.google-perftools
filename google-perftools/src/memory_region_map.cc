@@ -111,6 +111,7 @@
 #ifdef HAVE_PTHREAD
 #include <pthread.h>   // for pthread_t, pthread_self()
 #endif
+#include <stddef.h>
 
 #include <algorithm>
 #include <set>
@@ -194,15 +195,11 @@ void MemoryRegionMap::Init(int max_stack_depth) {
     RAW_VLOG(10, "MemoryRegionMap Init increment done");
     return;
   }
-  // Set our hooks and make sure no other hooks existed:
-  if (MallocHook::SetMmapHook(MmapHook) != NULL  ||
-      MallocHook::SetMremapHook(MremapHook) != NULL  ||
-      MallocHook::SetSbrkHook(SbrkHook) != NULL  ||
-      MallocHook::SetMunmapHook(MunmapHook) != NULL) {
-    RAW_LOG(FATAL, "Had other mmap/mremap/munmap/sbrk MallocHook-s set. "
-                   "Make sure only one of MemoryRegionMap and the other "
-                   "client is active.");
-  }
+  // Set our hooks and make sure they were installed:
+  RAW_CHECK(MallocHook::AddMmapHook(&MmapHook), "");
+  RAW_CHECK(MallocHook::AddMremapHook(&MremapHook), "");
+  RAW_CHECK(MallocHook::AddSbrkHook(&SbrkHook), "");
+  RAW_CHECK(MallocHook::AddMunmapHook(&MunmapHook), "");
   // We need to set recursive_insert since the NewArena call itself
   // will already do some allocations with mmap which our hooks will catch
   // recursive_insert allows us to buffer info about these mmap calls.
@@ -229,11 +226,10 @@ bool MemoryRegionMap::Shutdown() {
     RAW_VLOG(10, "MemoryRegionMap Shutdown decrement done");
     return true;
   }
-  CheckMallocHooks();  // we assume no other hooks
-  MallocHook::SetMmapHook(NULL);
-  MallocHook::SetMremapHook(NULL);
-  MallocHook::SetSbrkHook(NULL);
-  MallocHook::SetMunmapHook(NULL);
+  RAW_CHECK(MallocHook::RemoveMmapHook(&MmapHook), "");
+  RAW_CHECK(MallocHook::RemoveMremapHook(&MremapHook), "");
+  RAW_CHECK(MallocHook::RemoveSbrkHook(&SbrkHook), "");
+  RAW_CHECK(MallocHook::RemoveMunmapHook(&MunmapHook), "");
   if (regions_) regions_->~RegionSet();
   regions_ = NULL;
   bool deleted_arena = LowLevelAlloc::DeleteArena(arena_);
@@ -245,15 +241,6 @@ bool MemoryRegionMap::Shutdown() {
   Unlock();
   RAW_VLOG(10, "MemoryRegionMap Shutdown done");
   return deleted_arena;
-}
-
-void MemoryRegionMap::CheckMallocHooks() {
-  if (MallocHook::GetMmapHook() != MmapHook  ||
-      MallocHook::GetMunmapHook() != MunmapHook  ||
-      MallocHook::GetMremapHook() != MremapHook  ||
-      MallocHook::GetSbrkHook() != SbrkHook) {
-    RAW_LOG(FATAL, "Our mmap/mremap/munmap/sbrk MallocHook-s got changed.");
-  }
 }
 
 // Invariants (once libpthread_initialized is true):
@@ -595,8 +582,8 @@ void MemoryRegionMap::MmapHook(const void* result,
                                int fd, off_t offset) {
   // TODO(maxim): replace all 0x%"PRIxS" by %p when RAW_VLOG uses a safe
   // snprintf reimplementation that does not malloc to pretty-print NULL
-  RAW_VLOG(10, "MMap = 0x%"PRIxPTR" of %"PRIuS" at %llu "
-              "prot %d flags %d fd %d offs %lld",
+  RAW_VLOG(10, "MMap = 0x%"PRIxPTR" of %"PRIuS" at %"PRIu64" "
+              "prot %d flags %d fd %d offs %"PRId64,
               reinterpret_cast<uintptr_t>(result), size,
               reinterpret_cast<uint64>(start), prot, flags, fd,
               static_cast<int64>(offset));
