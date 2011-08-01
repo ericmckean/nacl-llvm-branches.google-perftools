@@ -8,14 +8,22 @@ readonly PNACL_AS=${PNACL_TC_BASE}/pnacl-as
 readonly PNACL_LD=${PNACL_TC_BASE}/pnacl-ld
 readonly PNACL_RANLIB=${PNACL_TC_BASE}/pnacl-ranlib
 
-readonly NACL_TC_BASE=${NACL_ROOT}/native_client/toolchain/linux_x86/bin
-readonly NACL_TC_BASE_NEWLIB=${NACL_ROOT}/native_client/toolchain/linux_x86_newlib/bin
+if [ x${NACL_SDK}x == "xx" ]; then
+  if [  x${NACL_ROOT}x == "xx" ]; then
+    echo 'Set $NACL_SDK to root of nacl SDK'
+    exit 1
+  fi
+  readonly NACL_TC_BASE=${NACL_ROOT}/native_client/toolchain/linux_x86/bin
+  readonly NACL_TC_BASE_NEWLIB=${NACL_ROOT}/native_client/toolchain/linux_x86_newlib/bin  
+else
+  readonly NACL_TC_BASE_NEWLIB=${NACL_SDK}/toolchain/linux_x86/bin
+fi
 
 readonly INSTALL_DIR=$(pwd)/install
 readonly BUILD_DIR=$(pwd)/build
 
-readonly NACL_CC=${NACL_CC:-pnacl}
-readonly NACL_ARCH=${NACL_ARCH:-x86-64}
+readonly NACL_CC=${NACL_CC:-nacl-gcc-newlib}
+readonly NACL_ARCH=${NACL_ARCH:-x86-32}
 
 NEXE_SUFFIX=pexe
 
@@ -125,11 +133,6 @@ tc-test() {
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <tc-configure|tc-make|tc-test|tc-install|all|tc-clean>"
-  exit 1
-fi
-
-if [  x${NACL_ROOT}x == "xx" ]; then
-  echo 'Set $NACL_ROOT to root of nacl checkout'
   exit 1
 fi
 
